@@ -1,5 +1,5 @@
-streamlit
-streamlit_dynamic_filters==0.1.3
+streamlit>= 1.28
+streamlit_dynamic_filters
 streamlit-aggrid
 pandas
 python-pptx~=0.6.21
@@ -12,4 +12,8 @@ kaleido
 openai
 snowflake-connector-python
 langchain
+langchain-community
+langchain-core
+snowflake-snowpark-python
+pyarrow==10.0.1
 

@@ -1,5 +1,5 @@
 import pandas as pd
-import snowflake.connector
+#import snowflake.connector
 import streamlit as st
 from streamlit_dynamic_filters import DynamicFilters
 from st_aggrid import AgGrid
@@ -29,49 +29,6 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 st.set_page_config(layout="wide", page_icon='⚡', page_title="Instant Insight")
 path = os.path.dirname(__file__)
 today = date.today()
-
-
-# get Snowflake credentials from Streamlit secrets
-# SNOWFLAKE_ACCOUNT = st.secrets["snowflake_credentials"]["SNOWFLAKE_ACCOUNT"]
-# SNOWFLAKE_USER = st.secrets["snowflake_credentials"]["SNOWFLAKE_USER"]
-# SNOWFLAKE_PASSWORD = st.secrets["snowflake_credentials"]["SNOWFLAKE_PASSWORD"]
-# SNOWFLAKE_DATABASE = st.secrets["snowflake_credentials"]["SNOWFLAKE_DATABASE"]
-# SNOWFLAKE_SCHEMA = st.secrets["snowflake_credentials"]["SNOWFLAKE_SCHEMA"]
-
-
-# @st.cache_resource
-# def get_database_session():
-#     """Returns a database session object."""
-#     return snowflake.connector.connect(
-#         account=SNOWFLAKE_ACCOUNT,
-#         user=SNOWFLAKE_USER,
-#         password=SNOWFLAKE_PASSWORD,
-#         database=SNOWFLAKE_DATABASE,
-#         schema=SNOWFLAKE_SCHEMA,
-#     )
-
-
-# @st.cache_data
-# def get_data(_conn, query):
-#     """Returns a pandas DataFrame with the data from Snowflake."""
-#     cur = conn.cursor()
-#     cur.execute(query)
-
-#     # Fetch the result as a pandas DataFrame
-#     column_names = [col[0] for col in cur.description]
-#     data = cur.fetchall()
-#     df = pd.DataFrame(data, columns=column_names)
-
-#     # Close the connection to Snowflake
-#     cur.close()
-#     conn.close()
-#     return df
-
-
-@st.cache_data
-def get_data():
-    df = pd.read_csv('prospects.csv')
-    return df
 
 
 def resize_image(url):
@@ -208,10 +165,10 @@ def get_financials(df, col_name, metric_name):
     return metric_df
 
 
-def generate_gpt_response(gpt_input, max_tokens):
+def generate_gpt_response(gpt_input, max_tokens, api_key, llm_model):
     """function to generate a response from GPT-3. Takes input and max tokens as arguments and returns a response"""
     # Create an instance of the OpenAI class
-    chat = ChatOpenAI(openai_api_key=st.secrets["openai_credentials"]["API_KEY"], model='gpt-3.5-turbo-0613',
+    chat = ChatOpenAI(openai_api_key=api_key, model=llm_model,
                       temperature=0, max_tokens=max_tokens)
 
     # Generate a response from the model
@@ -355,12 +312,16 @@ def no_data_plot():
     return fig
 
 
-# Get the data from Snowflake
-# conn = get_database_session()
+#conn = st.connection("snowflake")
+#df = conn.query("SELECT * from prospects LIMIT 1000;", ttl=600)
+df = pd.read_csv('prospects.csv')
 
-# query = "SELECT * FROM us_prospects LIMIT 500;"
+# Fix column names. Replace underscore with space, lowercase column names, and capitalize first words
+df.columns = df.columns.str.replace('_', ' ').str.lower().str.title()
 
-df = get_data()
+with st.sidebar:
+    openai_key = st.text_input(label="Your OpenAI API key", help="Your API key is not stored anywhere")
+    llm_model = st.selectbox(label="Choose a model", options=["gpt-3.5-turbo", "gpt-4-turbo", "gpt-4", "gpt-4o"])
 
 # create sidebar filters
 st.sidebar.write('**Use filters to select prospects** 👇')
@@ -447,6 +408,10 @@ if submit and response_df.empty:
     with ui_container:
         st.warning("Please select a prospect!")
 
+elif submit and openai_key == "":
+    with ui_container:
+        st.warning("Please input your OpenAI API key")
+
 # if user input is not empty and button is clicked then generate slides
 elif submit and response_df is not None:
     with ui_container:
@@ -459,7 +424,7 @@ elif submit and response_df is not None:
 
                 # join df with response_df to get a ticker of selected prospect
                 df_ticker = pd.merge(df, response_df, left_on='Company Name', right_on='Company Name')
-                selected_ticker = df_ticker['Tickers'].values[0]
+                selected_ticker = df_ticker['Ticker'].values[0]
 
                 # open presentation template
                 pptx = path + '//' + 'template.pptx'
@@ -568,9 +533,10 @@ elif submit and response_df is not None:
                     pass
 
                 ############################################################################################################
+                
                 # create competitors slide
                 input_competitors = """What are the top competitors of {} company with ticker {}?
-                                    Provide up to 4 most relevant public competitors comparable by revenue and market cap.
+                                    Provide up to 4 most relevant public US competitors comparable by revenue and market cap.
                                     Return output as a Python dictionary with company name as key and ticker as value.
                                     Do not return anything else."""
 
@@ -578,7 +544,7 @@ elif submit and response_df is not None:
                 input_competitors = input_competitors.format(name, selected_ticker)
 
                 # return response from GPT-3
-                gpt_comp_response = generate_gpt_response(gpt_input=input_competitors, max_tokens=250)
+                gpt_comp_response = generate_gpt_response(gpt_input=input_competitors, max_tokens=250, api_key=openai_key, llm_model=llm_model)
 
                 # extract dictionary from response
                 peers_dict = dict_from_string(gpt_comp_response)
@@ -663,17 +629,18 @@ elif submit and response_df is not None:
                             os.remove('logo.png')
 
                 ############################################################################################################
+
                 # create strengths and weaknesses slide
 
-                input_swot = """Create a brief SWOT analysis of {} company with ticker {}?
-                                Return output as a Python dictionary with the following keys: Strengths, Weaknesses, 
-                                Opportunities, Threats as keys and analysis as values.
-                                Do not return anything else."""
-
-                input_swot = input_swot.format(name, selected_ticker)
-
+                input_swot = f"""
+                Create a SWOT analysis of {name} company with ticker {selected_ticker}
+                Return output as a Python dictionary with the following keys: Strengths, Weaknesses, 
+                Opportunities, Threats. The values should be a brief description of each in string format.
+                Do not return anything else. Be concise and specific.
+                """
+                
                 # return response from GPT-3
-                gpt_swot = generate_gpt_response(input_swot, 1000)
+                gpt_swot = generate_gpt_response(gpt_input=input_swot, max_tokens=1000, api_key=openai_key, llm_model=llm_model)
 
                 # extract dictionary from response
                 swot_dict = dict_from_string(gpt_swot)
@@ -693,7 +660,7 @@ elif submit and response_df is not None:
                 replace_text(replaces_3, s_w_slide)
 
                 ############################################################################################
-
+                
                 # create value prop slide
                 input_vp = """"Create a brief value proposition using Value Proposition Canvas framework for {product} for 
                 {name} company with ticker {ticker} that operates in {industry} industry.
@@ -703,7 +670,7 @@ elif submit and response_df is not None:
                 input_vp = input_vp.format(product=product, name=name, ticker=selected_ticker, industry=industry)
 
                 # return response from GPT-3
-                gpt_value_prop = generate_gpt_response(input_vp, 1000)
+                gpt_value_prop = generate_gpt_response(gpt_input=input_vp, max_tokens=1000, api_key=openai_key, llm_model=llm_model)
 
                 # extract dictionary from response
                 value_prop_dict = dict_from_string(gpt_value_prop)
@@ -722,6 +689,7 @@ elif submit and response_df is not None:
                 replace_text(replaces_4, vp_slide)
 
                 ############################################################################################
+
                 # key people slide
                 key_people = ticker.asset_profile[selected_ticker]['companyOfficers']
 
@@ -759,6 +727,7 @@ elif submit and response_df is not None:
                 replace_text(replaces_6, key_people_slide)
 
                 ############################################################################################
+            
                 # corporate news
                 news_df = ticker.corporate_events
 
@@ -813,6 +782,7 @@ elif submit and response_df is not None:
                 replace_text(replaces_7, key_people_slide)
 
                 ############################################################################################
+            
                 # ESG slide
                 # get ESG scores from Yahoo Finance
                 try:
@@ -866,6 +836,7 @@ elif submit and response_df is not None:
                 replace_text(replaces_8, esg_slide)
 
                 ###########################################################################################
+            
                 # create file name
                 filename = '{} {}.pptx'.format(name, today)
 
@@ -884,7 +855,7 @@ elif submit and response_df is not None:
             # if there is any error, display an error message
             except Exception as e:
                 with ui_container:
-                    #st.write(e)
+                    st.write(e)
                     # get more details on error
-                    #st.write(traceback.format_exc())
+                    st.write(traceback.format_exc())
                     st.error("Oops, something went wrong, please try again or select a different prospect.")
